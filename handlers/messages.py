@@ -66,7 +66,14 @@ def detect_service(url: str) -> str:
     return "unknown"
 
 
-ALLOWED_SERVICES = {"tiktok", "x"}
+ALLOWED_SERVICES = {
+    "tiktok",
+    "x",
+    "youtube",
+    "reddit",
+    "instagram",
+    "soundcloud",
+}
 
 
 def make_caption(info: dict) -> str:
@@ -117,18 +124,24 @@ async def handle_text(message: Message) -> None:
 
     url = extract_url(message.text or "")
 
-    # ❗ молчим в группах
     if not url:
         if is_private:
-            await message.answer("Принимаются только ссылки TikTok / X.")
+            await message.answer(
+                "Принимаются только ссылки TikTok / X / YouTube / Reddit / Instagram / SoundCloud"
+            )
         return
 
     service = detect_service(url)
 
+    if service == "unknown":
+        if is_private:
+            await message.answer("Сайт не распознан.")
+        return
+
     if service not in ALLOWED_SERVICES:
         if is_private:
             await message.answer(
-                "❌ Этот сервис пока не поддерживается.\nРазрешены: TikTok, X (Twitter)"
+                "Этот сервис пока не поддерживается.\nРазрешены: TikTok, X, YouTube, Reddit, Instagram, SoundCloud"
             )
         return
 
