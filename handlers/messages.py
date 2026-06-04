@@ -1,5 +1,5 @@
 import asyncio
-import contextlib  # Используем для безопасного подавления CancelledError
+import contextlib
 import logging
 import re
 import shutil
@@ -18,7 +18,6 @@ from services.download import download_with_ytdlp
 log = logging.getLogger(__name__)
 router = Router()
 
-# Ограничиваем количество одновременных загрузок на основе конфигурации
 DOWNLOAD_SEMAPHORE = asyncio.Semaphore(SETTINGS.max_workers)
 
 URL_RE = re.compile(
@@ -63,7 +62,7 @@ def detect_service(url: str) -> str:
         return "instagram"
     if "soundcloud.com" in host:
         return "soundcloud"
-    if "spotify.com" in host:  # ФИКС: Исправлено дефолтное условие
+    if "spotify.com" in host:
         return "spotify"
 
     return "unknown"
@@ -99,11 +98,6 @@ async def cleanup_path(path: Path) -> None:
 
 
 async def send_downloaded_file(message: Message, file_path: Path, info: dict) -> None:
-    # Проверка на лимит Telegram Bot API (50 MB)
-    # file_size_mb = file_path.stat().st_size / (1024 * 1024)
-    # if file_size_mb > 50:
-    #     raise ValueError(f"Размер файла ({file_size_mb:.1f}MB) превышает лимит Telegram (50MB).")
-
     caption = make_caption(info)
     suffix = file_path.suffix.lower()
     file = FSInputFile(str(file_path))
@@ -160,7 +154,6 @@ async def handle_text(message: Message) -> None:
     task: Optional[asyncio.Task] = None
 
     try:
-        # Занимаем слот в семафоре для соблюдения max_workers
         async with DOWNLOAD_SEMAPHORE:
             await progress_msg.edit_text(
                 f"⬇️ Скачиваю медиа из {service}...\n[░░░░░░░░░░░░]"
@@ -189,7 +182,6 @@ async def handle_text(message: Message) -> None:
                 url, SETTINGS.download_root, progress_state=progress_state
             )
 
-            # Останавливаем фоновый апдейтер перед отправкой файла
             stop_flag = True
             if task:
                 task.cancel()
@@ -222,7 +214,6 @@ async def handle_text(message: Message) -> None:
                 await progress_msg.delete()
 
     finally:
-        # ГАРАНТИРОВАННАЯ ОЧИСТКА: Таска отменяется всегда, даже если упал сам yt-dlp
         if task and not task.done():
             task.cancel()
 

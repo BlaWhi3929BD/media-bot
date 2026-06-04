@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Optional
@@ -55,22 +56,16 @@ def download_with_ytdlp_sync(
         },
     }
 
-    # Мягкая проверка: активируем маскировку под Chrome только если curl-cffi доступен
     try:
         import curl_cffi
-
-        # Импортируем целевой класс для маскировки сетевых запросов
         from yt_dlp.networking.impersonate import ImpersonateTarget
 
-        # Для API библиотеки yt-dlp требует объект ImpersonateTarget, а не просто строку
         if hasattr(ImpersonateTarget, "from_str"):
             ydl_opts["impersonate"] = ImpersonateTarget.from_str("chrome")
         else:
             ydl_opts["impersonate"] = ImpersonateTarget(browser="chrome")
 
     except Exception:
-        # Если curl_cffi нет, либо изменился внутренний API yt-dlp,
-        # просто убираем ключ, чтобы бот продолжил работу на стандартных запросах
         ydl_opts.pop("impersonate", None)
 
     if cookies_path.exists():
@@ -107,7 +102,11 @@ async def download_with_ytdlp(
     if progress_state is None:
         progress_state = {"last_percent": 0}
 
-    info, file_path = await asyncio.to_thread(
-        download_with_ytdlp_sync, url, temp_dir, progress_state
-    )
-    return info, file_path, temp_dir, progress_state
+    try:
+        info, file_path = await asyncio.to_thread(
+            download_with_ytdlp_sync, url, temp_dir, progress_state
+        )
+        return info, file_path, temp_dir, progress_state
+    except Exception:
+        await asyncio.to_thread(shutil.rmtree, temp_dir, ignore_errors=True)
+        raise
