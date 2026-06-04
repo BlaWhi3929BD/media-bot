@@ -3,6 +3,7 @@ import contextlib
 import logging
 import re
 import shutil
+from collections import deque
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -19,6 +20,7 @@ log = logging.getLogger(__name__)
 router = Router()
 
 DOWNLOAD_SEMAPHORE = asyncio.Semaphore(SETTINGS.max_workers)
+QUEUE = deque()
 
 URL_RE = re.compile(
     r"(https?://[^\s<>()]+|www\.[^\s<>()]+|(?:vt\.tiktok\.com|tiktok\.com|youtu\.be|youtube\.com|x\.com|twitter\.com|instagram\.com|reddit\.com|soundcloud\.com|open\.spotify\.com)/[^\s<>()]+)",
@@ -147,14 +149,48 @@ async def handle_text(message: Message) -> None:
             )
         return
 
+    queue_id = object()
+    QUEUE.append(queue_id)
+
+    position = len(QUEUE)
+
     progress_msg = await message.answer(
-        f"⬇️ Ссылка принята ({service}). Ожидание очереди...\n[░░░░░░░░░░░░]"
+        f"⌛ Ссылка принята ({service})\nПозиция в очереди: #{position}"
     )
     temp_dir: Optional[Path] = None
     task: Optional[asyncio.Task] = None
 
+    queue_task: Optional[asyncio.Task] = None
     try:
+
+        async def queue_updater():
+            last_pos = None
+
+            while queue_id in QUEUE:
+                pos = QUEUE.index(queue_id) + 1
+
+                if pos != last_pos:
+                    last_pos = pos
+
+                    with contextlib.suppress(Exception):
+                        await progress_msg.edit_text(
+                            f"⌛ Ссылка принята ({service})\nПозиция в очереди: #{pos}"
+                        )
+
+                await asyncio.sleep(3)
+
+        queue_task = asyncio.create_task(queue_updater())
+
         async with DOWNLOAD_SEMAPHORE:
+            try:
+                QUEUE.remove(queue_id)
+            except ValueError:
+                pass
+
+            if queue_task:
+                queue_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await queue_task
             await progress_msg.edit_text(
                 f"⬇️ Скачиваю медиа из {service}...\n[░░░░░░░░░░░░]"
             )
@@ -219,3 +255,12 @@ async def handle_text(message: Message) -> None:
 
         if temp_dir and temp_dir.exists():
             await cleanup_path(temp_dir)
+
+        with contextlib.suppress(ValueError):
+            QUEUE.remove(queue_id)
+
+        if queue_task and not queue_task.done():
+            queue_task.cancel()
+
+            with contextlib.suppress(asyncio.CancelledError):
+                await queue_task
