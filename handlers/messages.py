@@ -10,6 +10,7 @@ from aiogram import F, Router
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
 from aiogram.types import FSInputFile, Message
+
 from config import SETTINGS
 from services.download import download_with_ytdlp
 
@@ -36,23 +37,6 @@ def extract_url(text: str) -> Optional[str]:
         url = "https://" + url
 
     parsed = urlparse(url)
-
-    if not parsed.netloc:
-        return None
-
-    return url
-
-
-def normalize_url(url: str) -> Optional[str]:
-    url = url.strip()
-    parsed = urlparse(url)
-
-    if not parsed.netloc:
-        return None
-
-    if not parsed.scheme:
-        url = "https://" + url
-        parsed = urlparse(url)
 
     if not parsed.netloc:
         return None
@@ -127,73 +111,20 @@ async def start(message: Message) -> None:
     )
 
 
-# @router.message(F.text)
-# async def handle_text(message: Message) -> None:
-#     url = extract_url(message.text or "")
-#     if not url:
-#         await message.answer("Некорректная ссылка.")
-#         return
-#     service = detect_service(url)
-#     if service not in ALLOWED_SERVICES:
-#         await message.answer(
-#             "❌ Этот сервис пока не поддерживается.\nРазрешены: TikTok, X (Twitter)"
-#         )
-#         return
-
-#     # if (
-#     #     service == "spotify"
-#     #     or service == "youtube"
-#     #     or service == "reddit"
-#     #     or service == "soundcloud"
-#     #     or service == "instagram"
-#     # ):
-#     #     await message.answer("Бот пока не поддерживает этот источник.")
-#     #     return
-
-#     status = await message.answer(f"Ссылка принята. Источник: {service}. Ожидайте...")
-
-#     temp_dir: Optional[Path] = None
-#     try:
-#         info, file_path, temp_dir = await download_with_ytdlp(
-#             url, SETTINGS.download_root
-#         )
-#         await status.edit_text(f"Файл готов. Отправляю: {service}.")
-#         if not file_path.exists():
-#             raise FileNotFoundError("Downloaded file not found")
-#         await send_downloaded_file(message, file_path, info)
-#         try:
-#             await status.delete()
-#         except Exception:
-#             pass
-#     except Exception as exc:
-#         log.exception("Failed to process url %s", url)
-#         await status.edit_text(
-#             f"Не получилось обработать ссылку: {type(exc).__name__}: {exc}"
-#         )
-#     finally:
-#         if temp_dir and temp_dir.exists():
-#             await cleanup_path(temp_dir)
-
-
 @router.message(F.text)
 async def handle_text(message: Message) -> None:
     is_private = message.chat.type == "private"
 
     url = extract_url(message.text or "")
 
-    # ❗ В группе: молчим, если нет ссылки
+    # ❗ молчим в группах
     if not url:
         if is_private:
-            await message.answer("Принимаются только ссылки из: tiktok, x (twitter).")
-        return
-
-    url = extract_url(message.text or "")
-    if not url:
+            await message.answer("Принимаются только ссылки TikTok / X.")
         return
 
     service = detect_service(url)
 
-    # ❗ В группе: молча игнорируем неподдерживаемые сервисы
     if service not in ALLOWED_SERVICES:
         if is_private:
             await message.answer(
@@ -204,6 +135,7 @@ async def handle_text(message: Message) -> None:
     status = await message.answer(f"Ссылка принята. Источник: {service}. Ожидайте...")
 
     temp_dir: Optional[Path] = None
+
     try:
         info, file_path, temp_dir = await download_with_ytdlp(
             url, SETTINGS.download_root
@@ -223,11 +155,8 @@ async def handle_text(message: Message) -> None:
     except Exception as exc:
         log.exception("Failed to process url %s", url)
 
-        # ❗ в группе лучше не спамить ошибками
         if is_private:
-            await status.edit_text(
-                f"Не получилось обработать ссылку: {type(exc).__name__}: {exc}"
-            )
+            await status.edit_text(f"Ошибка: {type(exc).__name__}: {exc}")
         else:
             await status.delete()
 

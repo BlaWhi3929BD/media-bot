@@ -1,47 +1,3 @@
-# import asyncio
-# import tempfile
-# from pathlib import Path
-# from typing import Any
-
-# from yt_dlp import YoutubeDL
-
-
-# def download_with_ytdlp_sync(url: str, temp_dir: Path) -> tuple[dict[str, Any], Path]:
-#     ydl_opts = {
-#         "outtmpl": str(temp_dir / "%(title).120s [%(id)s].%(ext)s"),
-#         "noplaylist": True,
-#         "quiet": True,
-#         "no_warnings": True,
-#         "restrictfilenames": True,
-#         "merge_output_format": "mp4",
-#         "format": "bv*+ba/best",
-#         "writethumbnail": False,
-#         "writesubtitles": False,
-#         "writeautomaticsub": False,
-#         "ignoreerrors": False,
-#         "cookiefile": "cookies.txt",
-#     }
-
-#     with YoutubeDL(ydl_opts) as ydl:
-#         info = ydl.extract_info(url, download=True)
-#         if not isinstance(info, dict):
-#             raise RuntimeError("yt-dlp did not return a metadata dict")
-
-#     files = [p for p in temp_dir.rglob("*") if p.is_file()]
-#     if not files:
-#         raise RuntimeError("Downloaded file was not found")
-
-#     file_path = max(files, key=lambda p: p.stat().st_size)
-#     return info, file_path
-
-
-# async def download_with_ytdlp(
-#     url: str, download_root: Path
-# ) -> tuple[dict[str, Any], Path, Path]:
-#     temp_dir = Path(tempfile.mkdtemp(prefix="media_bot_", dir=download_root))
-#     info, file_path = await asyncio.to_thread(download_with_ytdlp_sync, url, temp_dir)
-#     return info, file_path, temp_dir
-
 import asyncio
 import tempfile
 from pathlib import Path
@@ -63,12 +19,13 @@ def download_with_ytdlp_sync(url: str, temp_dir: Path) -> tuple[dict[str, Any], 
         "quiet": True,
         "no_warnings": True,
         "restrictfilenames": True,
+        "format": "best[ext=mp4]/best",
         "merge_output_format": "mp4",
-        "format": "bv*+ba/best",
-        "writethumbnail": False,
-        "writesubtitles": False,
-        "writeautomaticsub": False,
-        "ignoreerrors": False,
+        "socket_timeout": 15,
+        "retries": 3,
+        "fragment_retries": 3,
+        "ignoreerrors": True,
+        "no_check_certificate": True,
     }
 
     # безопасно подключаем cookies только если файл существует
