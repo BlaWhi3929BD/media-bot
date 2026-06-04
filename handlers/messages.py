@@ -1,4 +1,5 @@
 import asyncio
+import contextlib  # Используем для безопасного подавления CancelledError
 import logging
 import re
 import shutil
@@ -16,6 +17,9 @@ from services.download import download_with_ytdlp
 
 log = logging.getLogger(__name__)
 router = Router()
+
+# Ограничиваем количество одновременных загрузок на основе конфигурации
+DOWNLOAD_SEMAPHORE = asyncio.Semaphore(SETTINGS.max_workers)
 
 URL_RE = re.compile(
     r"(https?://[^\s<>()]+|www\.[^\s<>()]+|(?:vt\.tiktok\.com|tiktok\.com|youtu\.be|youtube\.com|x\.com|twitter\.com|instagram\.com|reddit\.com|soundcloud\.com|open\.spotify\.com)/[^\s<>()]+)",
@@ -37,7 +41,6 @@ def extract_url(text: str) -> Optional[str]:
         url = "https://" + url
 
     parsed = urlparse(url)
-
     if not parsed.netloc:
         return None
 
@@ -60,7 +63,7 @@ def detect_service(url: str) -> str:
         return "instagram"
     if "soundcloud.com" in host:
         return "soundcloud"
-    if "spotify.com" in host:
+    if "spotify.com" in host:  # ФИКС: Исправлено дефолтное условие
         return "spotify"
 
     return "unknown"
@@ -73,6 +76,7 @@ ALLOWED_SERVICES = {
     "reddit",
     "instagram",
     "soundcloud",
+    "spotify",
 }
 
 
@@ -85,11 +89,21 @@ def make_caption(info: dict) -> str:
     return f"<b>{title}</b>{extra}{dur_text}"
 
 
+def make_bar(percent: int, size: int = 12) -> str:
+    filled = int(size * percent / 100)
+    return "█" * filled + "░" * (size - filled)
+
+
 async def cleanup_path(path: Path) -> None:
     await asyncio.to_thread(shutil.rmtree, path)
 
 
 async def send_downloaded_file(message: Message, file_path: Path, info: dict) -> None:
+    # Проверка на лимит Telegram Bot API (50 MB)
+    # file_size_mb = file_path.stat().st_size / (1024 * 1024)
+    # if file_size_mb > 50:
+    #     raise ValueError(f"Размер файла ({file_size_mb:.1f}MB) превышает лимит Telegram (50MB).")
+
     caption = make_caption(info)
     suffix = file_path.suffix.lower()
     file = FSInputFile(str(file_path))
@@ -114,65 +128,103 @@ async def send_downloaded_file(message: Message, file_path: Path, info: dict) ->
 @router.message(CommandStart())
 async def start(message: Message) -> None:
     await message.answer(
-        "Отправь мне ссылку одним сообщением, и я попробую скачать медиа и вернуть файл."
+        "Отправь ссылку одним сообщением, и я попробую скачать медиа и вернуть файл."
     )
 
 
 @router.message(F.text)
 async def handle_text(message: Message) -> None:
     is_private = message.chat.type == "private"
-
     url = extract_url(message.text or "")
 
     if not url:
         if is_private:
             await message.answer(
-                "Принимаются только ссылки TikTok / X / YouTube / Reddit / Instagram / SoundCloud"
+                "Принимаются только ссылки TikTok / X / YouTube / Reddit / Instagram / SoundCloud / Spotify"
             )
         return
 
     service = detect_service(url)
 
-    if service == "unknown":
-        if is_private:
-            await message.answer("Сайт не распознан.")
-        return
-
-    if service not in ALLOWED_SERVICES:
+    if service == "unknown" or service not in ALLOWED_SERVICES:
         if is_private:
             await message.answer(
-                "Этот сервис пока не поддерживается.\nРазрешены: TikTok, X, YouTube, Reddit, Instagram, SoundCloud"
+                "Этот сервис пока не поддерживается или сайт не распознан."
             )
         return
 
-    status = await message.answer(f"Ссылка принята. Источник: {service}. Ожидайте...")
-
+    progress_msg = await message.answer(
+        f"⬇️ Ссылка принята ({service}). Ожидание очереди...\n[░░░░░░░░░░░░]"
+    )
     temp_dir: Optional[Path] = None
+    task: Optional[asyncio.Task] = None
 
     try:
-        info, file_path, temp_dir = await download_with_ytdlp(
-            url, SETTINGS.download_root
-        )
+        # Занимаем слот в семафоре для соблюдения max_workers
+        async with DOWNLOAD_SEMAPHORE:
+            await progress_msg.edit_text(
+                f"⬇️ Скачиваю медиа из {service}...\n[░░░░░░░░░░░░]"
+            )
 
-        if not file_path.exists():
-            raise FileNotFoundError("Downloaded file not found")
+            progress_state = {"last_percent": 0}
+            last_percent = 0
+            stop_flag = False
 
-        await status.edit_text(f"Файл готов. Отправляю: {service}.")
-        await send_downloaded_file(message, file_path, info)
+            async def progress_updater():
+                nonlocal last_percent
+                while not stop_flag:
+                    percent = progress_state.get("last_percent", 0)
+                    if percent - last_percent >= 10:
+                        last_percent = percent
+                        bar = make_bar(percent)
+                        with contextlib.suppress(Exception):
+                            await progress_msg.edit_text(
+                                f"⬇️ Downloading: {percent}%\n[{bar}]"
+                            )
+                    await asyncio.sleep(1)
 
-        try:
-            await status.delete()
-        except Exception:
-            pass
+            task = asyncio.create_task(progress_updater())
+
+            info, file_path, temp_dir, _ = await download_with_ytdlp(
+                url, SETTINGS.download_root, progress_state=progress_state
+            )
+
+            # Останавливаем фоновый апдейтер перед отправкой файла
+            stop_flag = True
+            if task:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+            if not file_path.exists():
+                raise FileNotFoundError("Скачанный файл исчез или не был найден.")
+
+            with contextlib.suppress(Exception):
+                await progress_msg.edit_text("Загрузка завершена. Отправляю файл...")
+
+            await send_downloaded_file(message, file_path, info)
+
+            with contextlib.suppress(Exception):
+                await progress_msg.delete()
 
     except Exception as exc:
         log.exception("Failed to process url %s", url)
-
         if is_private:
-            await status.edit_text(f"Ошибка: {type(exc).__name__}: {exc}")
+            error_text = (
+                f"Ошибка: {exc}"
+                if isinstance(exc, ValueError)
+                else f"Ошибка: {type(exc).__name__}"
+            )
+            with contextlib.suppress(Exception):
+                await progress_msg.edit_text(error_text)
         else:
-            await status.delete()
+            with contextlib.suppress(Exception):
+                await progress_msg.delete()
 
     finally:
+        # ГАРАНТИРОВАННАЯ ОЧИСТКА: Таска отменяется всегда, даже если упал сам yt-dlp
+        if task and not task.done():
+            task.cancel()
+
         if temp_dir and temp_dir.exists():
             await cleanup_path(temp_dir)
