@@ -15,7 +15,7 @@ async def main():
 
     dp.include_router(router)
 
-    await dp.start_polling(bot)
+    await dp.start_polling(bot, drop_pending_updates=True)
 
 
 if __name__ == "__main__":

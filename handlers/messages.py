@@ -4,6 +4,7 @@ import logging
 import re
 import shutil
 from collections import deque
+from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 from typing import Optional
@@ -16,6 +17,8 @@ from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo, Message
 
 from config import SETTINGS
 from services.download import download_with_ytdlp
+
+BOOT_TIME = datetime.now(timezone.utc)
 
 log = logging.getLogger(__name__)
 router = Router()
@@ -195,6 +198,10 @@ async def start(message: Message) -> None:
 
 @router.message(F.text)
 async def handle_text(message: Message) -> None:
+
+    if message.date and message.date < BOOT_TIME:
+        return
+
     is_private = message.chat.type == "private"
     url = extract_url(message.text or "")
 
