@@ -1,5 +1,6 @@
 import asyncio
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Optional
@@ -8,14 +9,24 @@ from yt_dlp import YoutubeDL
 
 VIDEO_EXT = {".mp4", ".mkv", ".webm", ".mov", ".avi"}
 AUDIO_EXT = {".mp3", ".m4a", ".aac", ".opus", ".ogg", ".flac", ".wav"}
-VALID_EXT = VIDEO_EXT | AUDIO_EXT
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp"}
+GIF_EXT = {".gif"}
+VALID_EXT = VIDEO_EXT | AUDIO_EXT | IMAGE_EXT | GIF_EXT
+
+
+def collect_downloaded_files(temp_dir: Path) -> list[Path]:
+    files = [
+        p for p in temp_dir.rglob("*") if p.is_file() and p.suffix.lower() in VALID_EXT
+    ]
+    files.sort(key=lambda p: (p.stat().st_mtime, p.name))
+    return files
 
 
 def download_with_ytdlp_sync(
     url: str,
     temp_dir: Path,
     progress_state: dict,
-) -> tuple[dict[str, Any], Path]:
+) -> tuple[dict[str, Any], list[Path]]:
     cookies_path = Path("cookies.txt")
 
     def progress_hook(d):
@@ -29,22 +40,23 @@ def download_with_ytdlp_sync(
             return
 
         percent = int(downloaded / total * 100)
-
         if percent - progress_state.get("last_percent", 0) < 1:
             return
 
         progress_state["last_percent"] = percent
 
     ydl_opts = {
-        "outtmpl": str(temp_dir / "%(title).120s [%(id)s].%(ext)s"),
-        "noplaylist": True,
+        "outtmpl": str(temp_dir / "%(playlist_index)s_%(title).120s [%(id)s].%(ext)s"),
+        "noplaylist": False,
+        "playlistend": 10,
         "quiet": True,
         "no_warnings": True,
         "restrictfilenames": True,
         "format": "bestvideo+bestaudio/best",
         "merge_output_format": "mp4",
-        "socket_timeout": 15,
-        "retries": 3,
+        "socket_timeout": 10,
+        "retries": 2,
+        "extractor_retries": 2,
         "fragment_retries": 3,
         "ignoreerrors": False,
         "no_check_certificate": True,
@@ -57,44 +69,63 @@ def download_with_ytdlp_sync(
     }
 
     try:
-        import curl_cffi
+        import curl_cffi  # noqa: F401
         from yt_dlp.networking.impersonate import ImpersonateTarget
 
         if hasattr(ImpersonateTarget, "from_str"):
             ydl_opts["impersonate"] = ImpersonateTarget.from_str("chrome")
         else:
             ydl_opts["impersonate"] = ImpersonateTarget(browser="chrome")
-
     except Exception:
         ydl_opts.pop("impersonate", None)
 
     if cookies_path.exists():
         ydl_opts["cookiefile"] = str(cookies_path.resolve())
 
-    with YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
+    ytdlp_error: Exception | None = None
 
-        if not isinstance(info, dict):
-            raise RuntimeError("yt-dlp did not return a metadata dict")
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True) or {}
+        files = collect_downloaded_files(temp_dir)
+        if files:
+            return info, files
+        ytdlp_error = RuntimeError("yt-dlp завершился, но файлы не были найдены")
+    except Exception as exc:
+        ytdlp_error = exc
 
-    files = [
-        p
-        for p in temp_dir.rglob("*")
-        if p.is_file()
-        and not p.name.endswith(".part")
-        and p.suffix.lower() in VALID_EXT
-    ]
+    if not shutil.which("gallery-dl"):
+        raise ytdlp_error or RuntimeError(
+            "yt-dlp failed and gallery-dl is not installed"
+        )
 
+    cmd = ["gallery-dl", "-d", str(temp_dir), url]
+    if cookies_path.exists():
+        cmd.extend(["--cookies", str(cookies_path.resolve())])
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"gallery-dl failed (code {result.returncode}): {result.stderr.strip()}"
+        )
+
+    files = collect_downloaded_files(temp_dir)
     if not files:
-        raise RuntimeError("Downloaded media file was not found")
+        raise RuntimeError("gallery-dl не нашёл медиа-файлы")
 
-    file_path = max(files, key=lambda p: p.stat().st_size)
-
-    return info, file_path
+    info = {
+        "title": url,
+        "uploader": "Social Media",
+        "webpage_url": url,
+    }
+    return info, files
 
 
 async def download_with_ytdlp(
-    url: str, download_root: Path, progress_state: Optional[dict] = None
+    url: str,
+    download_root: Path,
+    progress_state: Optional[dict] = None,
 ):
     download_root.mkdir(parents=True, exist_ok=True)
     temp_dir = Path(tempfile.mkdtemp(prefix="media_bot_", dir=download_root))
@@ -103,10 +134,10 @@ async def download_with_ytdlp(
         progress_state = {"last_percent": 0}
 
     try:
-        info, file_path = await asyncio.to_thread(
+        info, files = await asyncio.to_thread(
             download_with_ytdlp_sync, url, temp_dir, progress_state
         )
-        return info, file_path, temp_dir, progress_state
+        return info, files, temp_dir, progress_state
     except Exception:
         await asyncio.to_thread(shutil.rmtree, temp_dir, ignore_errors=True)
         raise
