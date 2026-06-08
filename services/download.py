@@ -85,8 +85,17 @@ def download_with_ytdlp_sync(
     ytdlp_error: Exception | None = None
 
     try:
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True) or {}
+        try:
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True) or {}
+        except Exception as e:
+            if "Impersonate target" in str(e) and "impersonate" in ydl_opts:
+                ydl_opts.pop("impersonate", None)
+                with YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=True) or {}
+            else:
+                raise e
+
         files = collect_downloaded_files(temp_dir)
         if files:
             return info, files
@@ -116,8 +125,6 @@ def download_with_ytdlp_sync(
 
     info = {
         "title": url,
-        "uploader": "Social Media",
-        "webpage_url": url,
     }
     return info, files
 
