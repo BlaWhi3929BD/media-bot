@@ -27,7 +27,7 @@ DOWNLOAD_SEMAPHORE = asyncio.Semaphore(SETTINGS.max_workers)
 QUEUE = deque()
 
 URL_RE = re.compile(
-    r"(https?://[^\s<>()]+|www\.[^\s<>()]+|(?:vt\.tiktok\.com|tiktok\.com|youtu\.be|youtube\.com|x\.com|twitter\.com|instagram\.com|reddit\.com|soundcloud\.com|open\.spotify\.com)/[^\s<>()]+)",
+    r"(https?://[^\s<>()]+|www\.[^\s<>()]+|(?:vt\.tiktok\.com|tiktok\.com|youtu\.be|youtube\.com|x\.com|twitter\.com|instagram\.com|reddit\.com|soundcloud\.com",
     re.IGNORECASE,
 )
 
@@ -38,7 +38,6 @@ ALLOWED_SERVICES = {
     "reddit",
     "instagram",
     "soundcloud",
-    "spotify",
 }
 
 PHOTO_EXT = {".jpg", ".jpeg", ".png", ".webp"}
@@ -82,8 +81,6 @@ def detect_service(url: str) -> str:
         return "instagram"
     if "soundcloud.com" in host:
         return "soundcloud"
-    if "spotify.com" in host:
-        return "spotify"
 
     return "unknown"
 
@@ -192,7 +189,7 @@ async def send_downloaded_files(
 @router.message(CommandStart())
 async def start(message: Message) -> None:
     await message.answer(
-        "Отправьте ссылку одним сообщением, и я попробую скачать медиа и вернуть файл."
+        "Принимаются ссылки на TikTok / X / YouTube / Reddit / Instagram / SoundCloud"
     )
 
 
@@ -208,7 +205,7 @@ async def handle_text(message: Message) -> None:
     if not url:
         if is_private:
             await message.answer(
-                "Принимаются только ссылки TikTok / X / YouTube / Reddit / Instagram / SoundCloud / Spotify"
+                "Принимаются только ссылки TikTok / X / YouTube / Reddit / Instagram / SoundCloud"
             )
         return
 
