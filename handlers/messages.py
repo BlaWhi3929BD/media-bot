@@ -27,7 +27,7 @@ DOWNLOAD_SEMAPHORE = asyncio.Semaphore(SETTINGS.max_workers)
 QUEUE = deque()
 
 URL_RE = re.compile(
-    r"(https?://[^\s<>()]+|www\.[^\s<>()]+|(?:vt\.tiktok\.com|tiktok\.com|youtu\.be|youtube\.com|x\.com|twitter\.com|instagram\.com|reddit\.com|soundcloud\.com",
+    r"(https?://[^\s<>()]+|www\.[^\s<>()]+|(?:vt\.tiktok\.com|tiktok\.com|youtu\.be|youtube\.com|x\.com|twitter\.com|instagram\.com|reddit\.com|soundcloud\.com)[^\s<>()]*)",
     re.IGNORECASE,
 )
 
